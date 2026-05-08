@@ -21,21 +21,21 @@ export const sendTelegramAlert = async (alerts, customPrefix = '') => {
   for (const alert of alerts) {
     let message = '';
 
-    const prefix = customPrefix ? \`\${customPrefix}\` : (alert.type === 'NEW' ? '🌟 *NEW DEAL ALERT* 🌟' : '📉 *PRICE DROP ALERT* 📉');
+    const prefix = customPrefix ? `${customPrefix}` : (alert.type === 'NEW' ? '🌟 *NEW DEAL ALERT* 🌟' : '📉 *PRICE DROP ALERT* 📉');
 
-    message += \`\${prefix}\\n\\n\`;
+    message += `${prefix}\n\n`;
 
     if (alert.type === 'NEW') {
-      message += \`🏨 *Hotel:* \${alert.deal.hotelName}\\n\`;
-      message += \`💰 *Price:* $\${alert.deal.price}\\n\`;
+      message += `🏨 *Hotel:* ${alert.deal.hotelName}\n`;
+      message += `💰 *Price:* $${alert.deal.price}\n`;
     } else if (alert.type === 'PRICE_DROP') {
-      message += \`🏨 *Hotel:* \${alert.deal.hotelName}\\n\`;
-      message += \`💰 *Price:* ~$\${alert.oldPrice}~ ➡️ *$\${alert.deal.price}*\\n\`;
+      message += `🏨 *Hotel:* ${alert.deal.hotelName}\n`;
+      message += `💰 *Price:* ~$${alert.oldPrice}~ ➡️ *$${alert.deal.price}*\n`;
     }
 
-    message += \`📅 *Date:* \${alert.deal.date}\\n\`;
-    message += \`⭐ *Stars:* \${alert.deal.stars}\\n\\n\`;
-    message += \`🔗 [Book Here](\${alert.deal.link})\`;
+    message += `📅 *Date:* ${alert.deal.date}\n`;
+    message += `⭐ *Stars:* ${alert.deal.stars}\n\n`;
+    message += `🔗 [Book Here](${alert.deal.link})`;
 
     try {
       await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });

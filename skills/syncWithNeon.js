@@ -46,8 +46,8 @@ export const syncWithNeon = async (deals) => {
       if (!existingDeal) {
         // New deal
         await client.query(
-          \`INSERT INTO travel_deals (hotel_name, departure_date, price, link, stars, description)
-           VALUES ($1, $2, $3, $4, $5, $6)\`,
+          `INSERT INTO travel_deals (hotel_name, departure_date, price, link, stars, description)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
           [deal.hotelName, deal.date, deal.price, deal.link, deal.stars, deal.description]
         );
         
