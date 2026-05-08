@@ -1,0 +1,41 @@
+name: 🛫 Montreal Travel Monitor
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+env:
+  NODE_ENV: production
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+  MAX_BUDGET: ${{ secrets.MAX_BUDGET }}
+  TARGET_MONTHS: ${{ secrets.TARGET_MONTHS }}
+
+jobs:
+  run-bots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: 🎭 Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: 🚨 Run Last Minute Bot
+        run: node bot_last_minute.js
+
+      - name: 🏖️ Run Future Luxury Bot
+        run: node bot_future_luxury.js
