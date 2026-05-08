@@ -139,9 +139,22 @@ export const fetchSunwingData = async (mode, targetMonths = []) => {
     };
 
     if (mode === 'lastMinute') {
-      const url = 'https://www.sunwing.ca/en/promotion/last-minute-deals';
-      const results = await processPage(url);
-      deals = deals.concat(results);
+      const currentDate = new Date();
+      currentDate.setDate(currentDate.getDate() + 7);
+      const currentMonthStr = `${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
+      
+      const nextMonthDate = new Date();
+      nextMonthDate.setMonth(nextMonthDate.getMonth() + 1);
+      const nextMonthStr = `${String(nextMonthDate.getMonth() + 1).padStart(2, '0')}-01`;
+      
+      const targetLastMinuteMonths = [currentMonthStr, nextMonthStr];
+      
+      for (const month of targetLastMinuteMonths) {
+        // Use exact same URL structure as future bot to avoid 404s
+        const url = `https://www.sunwing.ca/en/search?from=YUL&date=${month}&flexibility=month&adults=2`;
+        const results = await processPage(url);
+        deals = deals.concat(results);
+      }
     } else if (mode === 'future') {
       for (const month of targetMonths) {
         // Construct search URLs based on the target months
