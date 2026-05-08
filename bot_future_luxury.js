@@ -14,6 +14,8 @@ const main = async () => {
   // 1. Scrape future deals for specific months
   const deals = await fetchSunwingData('future', targetMonths);
   
+  console.log(`Scraper found ${deals.length} raw deals from Sunwing.`);
+  
   // 2. Apply strict quality filters (strictMode = true)
   // Strict 5-stars, All-Inclusive, Beachfront, under budget
   const filteredDeals = applyQualityFilters(deals, true);

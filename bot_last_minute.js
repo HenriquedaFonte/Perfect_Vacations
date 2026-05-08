@@ -10,6 +10,8 @@ const main = async () => {
   // 1. Scrape last minute deals
   const deals = await fetchSunwingData('lastMinute');
   
+  console.log(`Scraper found ${deals.length} raw deals from Sunwing.`);
+  
   // 2. Apply relaxed quality filters (strictMode = false)
   // This just checks the budget and a lower minimum star rating
   const filteredDeals = applyQualityFilters(deals, false);
