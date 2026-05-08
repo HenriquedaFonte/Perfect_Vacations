@@ -21,8 +21,17 @@ export const fetchSunwingData = async (mode, targetMonths = []) => {
       console.log(`[fetchSunwingData] Navigating to ${url}`);
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       
-      // Wait for dynamic React content to render prices
-      await page.waitForTimeout(12000); 
+      // 4. Debug Mode: Log Title and URL
+      console.log(`[Debug] Current URL: ${page.url()}`);
+      console.log(`[Debug] Page Title: ${await page.title()}`);
+
+      // 3. Wait for Network Idle to ensure dynamic prices are loaded
+      try {
+        console.log('[fetchSunwingData] Waiting for network idle...');
+        await page.waitForLoadState('networkidle', { timeout: 30000 });
+      } catch (e) {
+        console.log('[fetchSunwingData] Network idle wait timed out, proceeding anyway...');
+      }
 
       // Scroll down to trigger lazy loading
       await page.evaluate(async () => {
@@ -35,14 +44,35 @@ export const fetchSunwingData = async (mode, targetMonths = []) => {
       // Extract deals directly from the DOM
       const extractedDeals = await page.evaluate(() => {
         const results = [];
-        // Look for typical deal card structures
-        const cards = document.querySelectorAll('article, [class*="card"], [class*="package"], [class*="Result"]');
         
+        // 1. Targeted Selectors: Look specifically for package cards
+        let cards = Array.from(document.querySelectorAll('[data-testid*="package"], [class*="PackageCard"], [class*="Package"], article'));
+        
+        // 2. Price-First Logic: If we found no targeted cards, look for the $ sign and traverse up
+        if (cards.length === 0) {
+          const allTextNodes = Array.from(document.querySelectorAll('*'))
+            .filter(el => el.children.length === 0 && (el.textContent.includes('$') || (typeof el.className === 'string' && el.className.includes('Price__Value'))));
+            
+          cards = allTextNodes.map(node => {
+            let parent = node.parentElement;
+            // Look up the tree until we find a reasonable container or hit the body
+            let depth = 0;
+            while (parent && parent.tagName !== 'BODY' && depth < 5) {
+              if (parent.className && typeof parent.className === 'string' && 
+                 (parent.className.includes('card') || parent.className.includes('container') || parent.className.includes('Package'))) {
+                break;
+              }
+              parent = parent.parentElement;
+              depth++;
+            }
+            return parent && parent.tagName !== 'BODY' ? parent : node.parentElement.parentElement;
+          }).filter(Boolean);
+        }
+
         cards.forEach(card => {
           const text = card.innerText || '';
           
-          // Basic heuristic: a valid deal card usually has a $ price and mentions days/nights or all inclusive
-          if (text.includes('$') && (text.toLowerCase().includes('night') || text.toLowerCase().includes('all inclusive') || text.toLowerCase().includes('star'))) {
+          if (text.includes('$') && text.length > 30) {
             
             // Extract Link
             const linkElement = card.querySelector('a');
@@ -63,7 +93,7 @@ export const fetchSunwingData = async (mode, targetMonths = []) => {
             if (starMatch) {
               stars = parseFloat(starMatch[1]);
             } else if (text.includes('5')) {
-              stars = 5; // Rough heuristic if explicit '5 star' text is missing but rating is visually 5
+              stars = 5; 
             } else if (text.includes('4')) {
               stars = 4;
             }
@@ -71,7 +101,7 @@ export const fetchSunwingData = async (mode, targetMonths = []) => {
             // Description
             const description = lines.join(' ').substring(0, 400);
 
-            // Date (Default to today if unparseable, Neon DB expects a date string)
+            // Date 
             let date = new Date().toISOString().split('T')[0];
             const dateMatch = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i);
             if (dateMatch) {

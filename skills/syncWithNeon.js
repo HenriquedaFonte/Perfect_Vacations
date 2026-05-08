@@ -23,7 +23,7 @@ export const syncWithNeon = async (deals) => {
     await client.query(`
       CREATE TABLE IF NOT EXISTS travel_deals (
         id SERIAL PRIMARY KEY,
-        hotel_name VARCHAR(255) NOT NULL,
+        hotel_name TEXT NOT NULL,
         departure_date DATE NOT NULL,
         price NUMERIC NOT NULL,
         link TEXT NOT NULL,
