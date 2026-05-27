@@ -13,6 +13,7 @@ env:
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   MAX_BUDGET: ${{ secrets.MAX_BUDGET }}
   TARGET_MONTHS: ${{ secrets.TARGET_MONTHS }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run-bots:
