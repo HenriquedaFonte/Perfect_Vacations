@@ -296,13 +296,30 @@ function parseHotelsFromText(text) {
     const [, , day, month, year, duration] = dateMatch;
     if (parseInt(duration) !== 7) continue;
 
-    // Find hotel name and location (look back up to 8 lines)
+    // Find hotel name, location, and star rating (look back up to 12 lines)
     let hotelName = '';
     let location = '';
+    let stars = 0; // 0 = unable to detect
 
-    for (let j = i - 1; j >= Math.max(0, i - 8); j--) {
+    for (let j = i - 1; j >= Math.max(0, i - 12); j--) {
       const l = lines[j];
       if (!l || l === 'Our top pick' || l === 'Filter' || l === 'Sort' || l.startsWith('$')) continue;
+
+      // Star rating line: ★★★★★ (filled), ☆ (empty), or "5 Stars" / "4 Stars"
+      if (stars === 0) {
+        const filledStars = (l.match(/★/g) || []).length;
+        const emptyStars  = (l.match(/☆/g) || []).length;
+        const totalStars  = filledStars + emptyStars;
+        if (filledStars > 0 && totalStars >= 1 && totalStars <= 5) {
+          stars = filledStars; // filled stars = hotel category
+          continue;
+        }
+        const starsTextMatch = l.match(/^(\d)\s+Stars?$/i);
+        if (starsTextMatch) {
+          stars = parseInt(starsTextMatch[1]);
+          continue;
+        }
+      }
 
       if (!location && l.match(/,\s*(Mexico|Dominican|Bahamas|Cuba|Jamaica|Costa Rica|Antigua|Barbados|Saint Lucia|Panama|Colombia|Aruba|Honduras|Nicaragua|St\.|Cancun|Riviera|Punta|Playa|Mazatlan|Cozumel|Los Cabos|Puerto Vallarta)/i)) {
         location = l.replace(/\s+(Very Good|Good|Excellent|Superior|Outstanding)\s+[\d.]+\s+\d+\+?\s*Reviews?.*$/i, '').trim();
@@ -377,7 +394,7 @@ function parseHotelsFromText(text) {
       duration: 7,
       pricePerAdult,
       total: total || pricePerAdult * 2,
-      stars: 4, // default — would need HTML parsing for exact stars
+      stars, // 0 = unable to detect from text (CSS/SVG icons not in innerText)
       source: 'sunwing',
     });
   }

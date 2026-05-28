@@ -9,9 +9,10 @@
  *   5. Extrai todos os hotéis com preços do resultspackage-plus.cgi
  *   6. Compara com DB e alerta em quedas de preço
  *
- * Mudança principal: scrapeAllDatesInSession() roda uma única sessão de browser
- * para todas as 9 datas com 45s entre cada busca. Isso preserva os cookies
- * DataDome e o fingerprint comportamental, evitando bloqueios.
+ * Filtros ativos:
+ *   - Países: Mexico, Bahamas, Dominican Republic apenas
+ *   - Estrelas: mínimo 5★ (se detectável no texto); 0★ (desconhecido) passa com aviso
+ *   - Budget: MAX_BUDGET env var
  */
 
 import 'dotenv/config';
@@ -65,6 +66,11 @@ const main = async () => {
 
   const maxBudget = process.env.MAX_BUDGET ? parseFloat(process.env.MAX_BUDGET) : Infinity;
 
+  // ── Active filters ──────────────────────────────────────────────
+  const ALLOWED_COUNTRIES = ['Mexico', 'Dominican Republic', 'Bahamas'];
+  const MIN_STARS = 5; // minimum hotel category (★★★★★)
+  // ───────────────────────────────────────────────────────────────
+
   let totalHotels = 0;
   let totalAlerts = 0;
   const failedDates = [];
@@ -96,14 +102,32 @@ const main = async () => {
       // Convert to deal format
       const deals = hotels.map(hotelToDeal);
 
-      // Filter by budget (stars filter removed — future bot tracks everything)
+      // ── Apply filters ────────────────────────────────────────────
       const filteredDeals = deals.filter(d => {
+        // 1. Country filter
+        if (!ALLOWED_COUNTRIES.includes(d.country)) {
+          console.log(`  [SKIP] ${d.hotelName} — país "${d.country}" fora do filtro`);
+          return false;
+        }
+        // 2. Stars filter
+        //    stars === 0 means the parser couldn't detect stars from innerText
+        //    (likely CSS/SVG icons). Pass-through with a warning so we don't
+        //    silently lose valid 5★ hotels. If stars ARE detected, require ≥ MIN_STARS.
+        if (d.stars > 0 && d.stars < MIN_STARS) {
+          console.log(`  [SKIP] ${d.hotelName} — ${d.stars}★ (mínimo ${MIN_STARS}★)`);
+          return false;
+        }
+        if (d.stars === 0) {
+          console.log(`  [WARN] ${d.hotelName} — estrelas não detectadas no texto (incluindo)`);
+        }
+        // 3. Budget filter
         if (d.price > maxBudget) {
           console.log(`  [SKIP] ${d.hotelName} — $${d.price} > budget $${maxBudget}`);
           return false;
         }
         return true;
       });
+      // ─────────────────────────────────────────────────────────────
 
       console.log(`  ${filteredDeals.length} hotéis dentro do budget`);
 
