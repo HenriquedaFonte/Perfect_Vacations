@@ -2,22 +2,25 @@
  * bot_future_luxury.js — Monitor de preços de pacotes futuros Nov/Dez 2026
  *
  * Estratégia de scraping:
- *   1. Navega organicamente via BSB widget (www.sunwing.ca → formulário)
- *   2. Intercepta POST para handler.cgi e injeta a data-alvo (Nov/Dez 2026)
- *   3. DataDome não bloqueia (comportamento orgânico preservado)
- *   4. Extrai todos os hotéis com preços do resultspackage-plus.cgi
- *   5. Compara com DB e alerta em quedas de preço
+ *   1. UMA única sessão de browser para todas as datas (preserva cookies DataDome)
+ *   2. Navega organicamente via BSB widget (www.sunwing.ca → formulário)
+ *   3. Intercepta POST para handler.cgi e injeta a data-alvo (Nov/Dez 2026)
+ *   4. DataDome não bloqueia (comportamento orgânico + sessão persistente)
+ *   5. Extrai todos os hotéis com preços do resultspackage-plus.cgi
+ *   6. Compara com DB e alerta em quedas de preço
+ *
+ * Mudança principal: scrapeAllDatesInSession() roda uma única sessão de browser
+ * para todas as 9 datas com 45s entre cada busca. Isso preserva os cookies
+ * DataDome e o fingerprint comportamental, evitando bloqueios.
  */
 
 import 'dotenv/config';
-import { fetchFuturePackages, getFutureTargetDates } from './skills/fetchFuturePackages.js';
+import { scrapeAllDatesInSession, getFutureTargetDates } from './skills/fetchFuturePackages.js';
 import { syncWithNeon } from './skills/syncWithNeon.js';
 import { sendTelegramAlert } from './skills/sendTelegramAlert.js';
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
 /**
- * Convert fetchFuturePackages hotel object → syncWithNeon deal format.
+ * Convert scrapeAllDatesInSession hotel object → syncWithNeon deal format.
  */
 function hotelToDeal(hotel) {
   // Build a consistent Sunwing link from hotel name (for DB reference)
@@ -28,7 +31,7 @@ function hotelToDeal(hotel) {
 
   const link = `https://www.sunwing.ca/en/hotel/${nameSlug}`;
 
-  // Rating: use 4 as default (we'd need to extract from page for exact value)
+  // Rating: use 4 as default (would need HTML parsing for exact stars)
   const stars = hotel.stars || 4;
 
   // Country for filtering
@@ -58,29 +61,36 @@ const main = async () => {
   // Target dates: key weeks in November and December 2026
   const targetDates = getFutureTargetDates();
   console.log(`   Datas-alvo (${targetDates.length}): ${targetDates.join(', ')}`);
+  console.log(`   Estratégia: sessão única de browser (DataDome bypass)`);
 
   const maxBudget = process.env.MAX_BUDGET ? parseFloat(process.env.MAX_BUDGET) : Infinity;
 
   let totalHotels = 0;
   let totalAlerts = 0;
-  let failedDates = [];
+  const failedDates = [];
 
   try {
-    for (const targetDate of targetDates) {
-      console.log(`\n==== ${targetDate} ====`);
+    // ─────────────────────────────────────────────────────────────
+    // SINGLE browser session for ALL dates — preserves DataDome
+    // session cookies and behavioural fingerprint across searches.
+    // scrapeAllDatesInSession() handles 45s inter-date delays.
+    // ─────────────────────────────────────────────────────────────
+    console.log(`\n🚀 Iniciando sessão única de browser para ${targetDates.length} datas...`);
+    const allResults = await scrapeAllDatesInSession(targetDates);
+    console.log(`\n✅ Scraping concluído. Processando resultados...\n`);
 
-      // Scrape with retry logic
-      const { hotels, packageCount, attempts } = await fetchFuturePackages(targetDate, 7);
+    // Process results per date (scraping already done — now DB sync + alerts)
+    for (const [date, { hotels, packageCount }] of allResults) {
+      const prettyDate = `${date.substring(0, 4)}-${date.substring(4, 6)}-${date.substring(6, 8)}`;
+      console.log(`\n==== ${prettyDate} ====`);
 
-      if (hotels.length === 0) {
-        console.log(`  ⚠️  Nenhum hotel encontrado (${attempts} tentativas). Pulando.`);
-        failedDates.push(targetDate);
-        // Wait before next date to avoid IP flagging
-        await sleep(5000);
+      if (!hotels || hotels.length === 0) {
+        console.log(`  ⚠️  Nenhum hotel encontrado. Pulando.`);
+        failedDates.push(date);
         continue;
       }
 
-      console.log(`  Encontrou ${hotels.length} hotéis (${packageCount} pacotes totais, ${attempts} tentativa(s))`);
+      console.log(`  Encontrou ${hotels.length} hotéis (${packageCount} pacotes totais)`);
       totalHotels += hotels.length;
 
       // Convert to deal format
@@ -97,31 +107,21 @@ const main = async () => {
 
       console.log(`  ${filteredDeals.length} hotéis dentro do budget`);
 
-      if (filteredDeals.length === 0) {
-        await sleep(3000);
-        continue;
-      }
+      if (filteredDeals.length === 0) continue;
 
       // Sync with DB and detect price drops
       const alerts = await syncWithNeon(filteredDeals);
       const priceDrop = alerts.filter(a => a.type === 'PRICE_DROP');
-      const newDeals = alerts.filter(a => a.type === 'NEW');
+      const newDeals  = alerts.filter(a => a.type === 'NEW');
 
       console.log(`  DB sync: ${newDeals.length} novos, ${priceDrop.length} quedas de preço`);
 
-      // Send alerts for this date
+      // Send Telegram alerts for new deals and price drops
       const importantAlerts = alerts.filter(a => a.type === 'PRICE_DROP' || a.type === 'NEW');
       if (importantAlerts.length > 0) {
-        const prefix = `🏖️ FUTURE (${targetDate.substring(0,4)}-${targetDate.substring(4,6)}-${targetDate.substring(6,8)} | 7 dias | YUL):`;
+        const prefix = `🏖️ FUTURE (${prettyDate} | 7 dias | YUL):`;
         await sendTelegramAlert(importantAlerts, prefix);
         totalAlerts += importantAlerts.length;
-      }
-
-      // Wait between date searches to avoid triggering DataDome patterns
-      if (targetDates.indexOf(targetDate) < targetDates.length - 1) {
-        const waitSecs = Math.floor(Math.random() * 10) + 5;
-        console.log(`  Aguardando ${waitSecs}s antes da próxima data...`);
-        await sleep(waitSecs * 1000);
       }
     }
 
@@ -137,7 +137,7 @@ const main = async () => {
     console.log(`--- ✅ Bot Future finalizado em ${elapsed}s ---`);
 
   } catch (error) {
-    console.error('❌ Erro no bot_future_luxury:', error.message, error.stack?.substring(0, 200));
+    console.error('❌ Erro no bot_future_luxury:', error.message, error.stack?.substring(0, 300));
     try {
       await sendTelegramAlert([{
         type: 'ERROR',
