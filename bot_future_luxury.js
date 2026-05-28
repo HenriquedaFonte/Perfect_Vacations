@@ -1,82 +1,158 @@
 /**
- * bot_future_luxury.js — Monitor de preços de pacotes de luxo futuros
+ * bot_future_luxury.js — Monitor de preços de pacotes futuros Nov/Dez 2026
  *
- * Lógica:
- *   - Scrapa a página de luxury resorts do Sunwing (YUL)
- *   - Filtra por meses-alvo (Nov/Dez 2026)
- *   - Sempre que encontra preço MENOR que o registrado no DB → alerta
- *   - Guarda o novo preço no DB
+ * Estratégia de scraping:
+ *   1. Navega organicamente via BSB widget (www.sunwing.ca → formulário)
+ *   2. Intercepta POST para handler.cgi e injeta a data-alvo (Nov/Dez 2026)
+ *   3. DataDome não bloqueia (comportamento orgânico preservado)
+ *   4. Extrai todos os hotéis com preços do resultspackage-plus.cgi
+ *   5. Compara com DB e alerta em quedas de preço
  */
 
 import 'dotenv/config';
-import { fetchSunwingData } from './skills/fetchSunwingData.js';
-import { applyQualityFilters } from './skills/applyQualityFilters.js';
+import { fetchFuturePackages, getFutureTargetDates } from './skills/fetchFuturePackages.js';
 import { syncWithNeon } from './skills/syncWithNeon.js';
 import { sendTelegramAlert } from './skills/sendTelegramAlert.js';
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Convert fetchFuturePackages hotel object → syncWithNeon deal format.
+ */
+function hotelToDeal(hotel) {
+  // Build a consistent Sunwing link from hotel name (for DB reference)
+  const nameSlug = hotel.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  const link = `https://www.sunwing.ca/en/hotel/${nameSlug}`;
+
+  // Rating: use 4 as default (we'd need to extract from page for exact value)
+  const stars = hotel.stars || 4;
+
+  // Country for filtering
+  const country = hotel.country || hotel.location?.split(',').pop()?.trim() || 'Unknown';
+
+  return {
+    hotelName: hotel.name,
+    date: hotel.departureDate,           // YYYY-MM-DD
+    price: hotel.pricePerAdult,          // price per person
+    total: hotel.total,                  // 2-adult total
+    link,
+    stars,
+    description: `${hotel.duration} days | All Inclusive | ${hotel.location}`,
+    destination: hotel.location,
+    country,
+    departureDate: hotel.departureDate,
+    duration: hotel.duration,
+  };
+}
+
 const main = async () => {
   const startTime = Date.now();
-  console.log('--- 🏖️ Bot Future Luxury iniciado ---');
-
-  // Meses-alvo: Nov e Dez 2026
-  const targetMonths = process.env.TARGET_MONTHS
-    ? process.env.TARGET_MONTHS.split(',').map(m => m.trim())
-    : ['2026-11', '2026-12'];
-
-  console.log(`   Meses-alvo: ${targetMonths.join(', ')}`);
-  console.log(`   Gateway: YUL (Montreal)`);
+  console.log('--- 🏖️ Bot Future Luxury (Nov/Dez 2026) iniciado ---');
+  console.log(`   Gateway: YUL (Montreal) | Duração: 7 dias`);
   console.log(`   Budget: $${process.env.MAX_BUDGET || 'sem limite'}`);
 
+  // Target dates: key weeks in November and December 2026
+  const targetDates = getFutureTargetDates();
+  console.log(`   Datas-alvo (${targetDates.length}): ${targetDates.join(', ')}`);
+
+  const maxBudget = process.env.MAX_BUDGET ? parseFloat(process.env.MAX_BUDGET) : Infinity;
+
+  let totalHotels = 0;
+  let totalAlerts = 0;
+  let failedDates = [];
+
   try {
-    // 1. Scrape da página de luxury resorts (4+ estrelas, YUL)
-    const deals = await fetchSunwingData('future', targetMonths);
-    console.log(`\nScraper encontrou ${deals.length} deals para os meses-alvo`);
+    for (const targetDate of targetDates) {
+      console.log(`\n==== ${targetDate} ====`);
 
-    if (deals.length === 0) {
-      console.log('ℹ️  Nenhum deal encontrado para os meses-alvo.');
-      console.log('   (Normal se os meses-alvo ainda estão longe — deals aparecem conforme a data se aproxima)');
-      console.log(`--- ✅ Bot Future finalizado ---`);
-      return;
+      // Scrape with retry logic
+      const { hotels, packageCount, attempts } = await fetchFuturePackages(targetDate, 7);
+
+      if (hotels.length === 0) {
+        console.log(`  ⚠️  Nenhum hotel encontrado (${attempts} tentativas). Pulando.`);
+        failedDates.push(targetDate);
+        // Wait before next date to avoid IP flagging
+        await sleep(5000);
+        continue;
+      }
+
+      console.log(`  Encontrou ${hotels.length} hotéis (${packageCount} pacotes totais, ${attempts} tentativa(s))`);
+      totalHotels += hotels.length;
+
+      // Convert to deal format
+      const deals = hotels.map(hotelToDeal);
+
+      // Filter by budget (stars filter removed — future bot tracks everything)
+      const filteredDeals = deals.filter(d => {
+        if (d.price > maxBudget) {
+          console.log(`  [SKIP] ${d.hotelName} — $${d.price} > budget $${maxBudget}`);
+          return false;
+        }
+        return true;
+      });
+
+      console.log(`  ${filteredDeals.length} hotéis dentro do budget`);
+
+      if (filteredDeals.length === 0) {
+        await sleep(3000);
+        continue;
+      }
+
+      // Sync with DB and detect price drops
+      const alerts = await syncWithNeon(filteredDeals);
+      const priceDrop = alerts.filter(a => a.type === 'PRICE_DROP');
+      const newDeals = alerts.filter(a => a.type === 'NEW');
+
+      console.log(`  DB sync: ${newDeals.length} novos, ${priceDrop.length} quedas de preço`);
+
+      // Send alerts for this date
+      const importantAlerts = alerts.filter(a => a.type === 'PRICE_DROP' || a.type === 'NEW');
+      if (importantAlerts.length > 0) {
+        const prefix = `🏖️ FUTURE (${targetDate.substring(0,4)}-${targetDate.substring(4,6)}-${targetDate.substring(6,8)} | 7 dias | YUL):`;
+        await sendTelegramAlert(importantAlerts, prefix);
+        totalAlerts += importantAlerts.length;
+      }
+
+      // Wait between date searches to avoid triggering DataDome patterns
+      if (targetDates.indexOf(targetDate) < targetDates.length - 1) {
+        const waitSecs = Math.floor(Math.random() * 10) + 5;
+        console.log(`  Aguardando ${waitSecs}s antes da próxima data...`);
+        await sleep(waitSecs * 1000);
+      }
     }
 
-    // 2. Filtro relaxado: 4+ estrelas, dentro do budget
-    const filteredDeals = applyQualityFilters(deals, false);
-    console.log(`${filteredDeals.length} deals após filtro (4★+, budget)`);
-
-    filteredDeals.forEach(d => {
-      console.log(`  ★ ${d.hotelName} (${d.destination}) — $${d.price} | ${d.stars}★ | ${d.date}`);
-    });
-
-    // 3. Sincronizar com DB
-    //    syncWithNeon detecta: NEW deal → alerta
-    //                         PRICE_DROP → alerta (isso é o core do future bot!)
-    //                         price igual → silêncio (só atualiza last_seen)
-    const alerts = await syncWithNeon(filteredDeals);
-
-    // 4. Filtrar só PRICE_DROP para o future bot (o que importa)
-    const priceDropAlerts = alerts.filter(a => a.type === 'PRICE_DROP' || a.type === 'NEW');
-
-    if (priceDropAlerts.length > 0) {
-      await sendTelegramAlert(priceDropAlerts, '🏖️ FUTURE LUXURY DEAL (YUL):');
-      console.log(`\n${priceDropAlerts.length} alertas enviados (${alerts.filter(a=>a.type==='PRICE_DROP').length} quedas de preço, ${alerts.filter(a=>a.type==='NEW').length} novos)`);
-    } else {
-      console.log('\nPreços estáveis — sem alertas.');
+    // Summary
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n=== RESUMO ===`);
+    console.log(`Datas pesquisadas: ${targetDates.length} | Falhas: ${failedDates.length}`);
+    console.log(`Total hotéis encontrados: ${totalHotels}`);
+    console.log(`Total alertas enviados: ${totalAlerts}`);
+    if (failedDates.length > 0) {
+      console.log(`Datas com falha: ${failedDates.join(', ')}`);
     }
+    console.log(`--- ✅ Bot Future finalizado em ${elapsed}s ---`);
 
   } catch (error) {
-    console.error('❌ Erro no bot_future_luxury:', error.message);
+    console.error('❌ Erro no bot_future_luxury:', error.message, error.stack?.substring(0, 200));
     try {
       await sendTelegramAlert([{
         type: 'ERROR',
-        deal: { hotelName: 'bot_future_luxury.js', date: new Date().toISOString(), price: 0, stars: 0, link: '' },
-        message: error.message
+        deal: {
+          hotelName: 'bot_future_luxury.js',
+          date: new Date().toISOString(),
+          price: 0,
+          stars: 0,
+          link: '',
+        },
+        message: error.message,
       }], '⚠️ ERRO NO BOT FUTURE');
     } catch {}
     process.exit(1);
   }
-
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`\n--- ✅ Bot Future finalizado em ${elapsed}s ---`);
 };
 
 main().catch(error => {

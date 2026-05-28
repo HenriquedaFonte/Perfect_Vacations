@@ -10,6 +10,7 @@ env:
   NODE_ENV: production
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
   TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   MAX_BUDGET: ${{ secrets.MAX_BUDGET }}
   TARGET_MONTHS: ${{ secrets.TARGET_MONTHS }}
@@ -18,7 +19,7 @@ env:
 jobs:
   run-bots:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: 📥 Checkout repository
