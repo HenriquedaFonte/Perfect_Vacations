@@ -115,7 +115,51 @@ async function runSearch(page) {
     };
   }
 
-  const bodyText = await page.evaluate(() => document.body?.innerText || '');
+  const { bodyText, starsSequence, starsMethod } = await page.evaluate(() => {
+    const bodyText = document.body?.innerText || '';
+
+    // ── Multi-method star extraction from DOM ──────────────────────
+    // Method A: aria-label="N stars" (most reliable if present)
+    const starsA = [];
+    document.querySelectorAll('[aria-label]').forEach(el => {
+      const m = (el.getAttribute('aria-label') || '').match(/^(\d)\s*(?:star|étoile)/i);
+      if (m) starsA.push(parseInt(m[1]));
+    });
+
+    // Method B: data-stars="N" attribute
+    const starsB = [];
+    document.querySelectorAll('[data-stars]').forEach(el => {
+      const s = parseInt(el.getAttribute('data-stars'));
+      if (s >= 1 && s <= 5) starsB.push(s);
+    });
+
+    // Method C: CSS class names like "stars-5", "rating-4", "cat-5"
+    const starsC = [];
+    const seen = new Set();
+    document.querySelectorAll('[class]').forEach(el => {
+      if (seen.has(el)) return;
+      const cls = typeof el.className === 'string' ? el.className : '';
+      const m = cls.match(/(?:^|\s)(?:stars?|rating|cat(?:egory)?)[-_](\d)(?:\s|$)/i);
+      if (m) {
+        const s = parseInt(m[1]);
+        if (s >= 1 && s <= 5) { starsC.push(s); seen.add(el); }
+      }
+    });
+
+    // Method D: Unicode ★ sequences in raw innerHTML
+    const starsD = (document.body?.innerHTML || '').match(/★{1,5}/g)?.map(s => s.length) || [];
+
+    // Pick best method: prefer A > B > C > D
+    let starsSequence = [];
+    let starsMethod = 'none';
+    if (starsA.length > 0)      { starsSequence = starsA; starsMethod = 'aria-label'; }
+    else if (starsB.length > 0) { starsSequence = starsB; starsMethod = 'data-stars'; }
+    else if (starsC.length > 0) { starsSequence = starsC; starsMethod = 'css-class'; }
+    else if (starsD.length > 0) { starsSequence = starsD; starsMethod = 'unicode-html'; }
+
+    return { bodyText, starsSequence, starsMethod };
+  });
+
   if (bodyText.length < 500) {
     return { success: false, reason: 'empty/blocked body', bodyLength: bodyText.length };
   }
@@ -123,7 +167,7 @@ async function runSearch(page) {
   const packageMatch = bodyText.match(/(\d+)\s+packages?\s+found/i);
   const packageCount = parseInt(packageMatch?.[1] || '0');
 
-  return { success: true, packageCount, bodyText };
+  return { success: true, packageCount, bodyText, starsSequence, starsMethod };
 }
 
 /**
@@ -223,7 +267,9 @@ export async function scrapeAllDatesInSession(targetDates) {
         }
       } else {
         sessionEstablished = true;
-        const hotels = parseHotelsFromText(searchResult.bodyText);
+        const { starsSequence = [], starsMethod = 'none' } = searchResult;
+        console.log(`  [Stars] method="${starsMethod}" found ${starsSequence.length} ratings: [${starsSequence.join(',')}]`);
+        const hotels = parseHotelsFromText(searchResult.bodyText, starsSequence);
         console.log(`  ✅ ${date}: ${searchResult.packageCount} packages, ${hotels.length} hotels parsed`);
         results.set(date, { hotels, packageCount: searchResult.packageCount });
       }
@@ -278,7 +324,11 @@ export async function fetchFuturePackages(targetDate) {
 /**
  * Parse hotel cards from the results page text.
  */
-function parseHotelsFromText(text) {
+/**
+ * @param {string} text - page innerText
+ * @param {number[]} starsSequence - ordered star counts extracted from DOM (may be empty)
+ */
+function parseHotelsFromText(text, starsSequence = []) {
   const hotels = [];
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -386,6 +436,12 @@ function parseHotelsFromText(text) {
     const monthIdx = monthNames.indexOf(month.charAt(0).toUpperCase() + month.slice(1).toLowerCase());
     const departureDate = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
+    // Star priority: DOM extraction > innerText ★ > 0 (unknown)
+    const domStars = starsSequence[hotels.length]; // ordered by card position
+    const finalStars = (domStars >= 1 && domStars <= 5) ? domStars
+      : (stars >= 1 && stars <= 5)                 ? stars
+      : 0; // unknown
+
     hotels.push({
       name: hotelName,
       location,
@@ -394,7 +450,7 @@ function parseHotelsFromText(text) {
       duration: 7,
       pricePerAdult,
       total: total || pricePerAdult * 2,
-      stars, // 0 = unable to detect from text (CSS/SVG icons not in innerText)
+      stars: finalStars, // 0 = unable to detect
       source: 'sunwing',
     });
   }
