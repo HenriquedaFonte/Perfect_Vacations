@@ -1,0 +1,29 @@
+name: 🔄 Keep Repository Active
+
+on:
+  schedule:
+    # Runs on the 1st of every month, well inside GitHub's 60-day inactivity
+    # window that auto-disables scheduled workflows (like Montreal Travel Monitor)
+    # when a repo goes too long without a push.
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 🫀 Empty commit to reset inactivity clock
+        run: |
+          git commit --allow-empty -m "chore: keep-alive commit to prevent GitHub from disabling scheduled workflows"
+          git push
